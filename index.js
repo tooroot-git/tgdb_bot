@@ -1,5 +1,3 @@
-// 📁 tgdb-proxy-bot/index.js
-
 require('dotenv').config();
 
 const { Telegraf } = require('telegraf');
@@ -13,17 +11,22 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const apiId = parseInt(process.env.TG_API_ID);
 const apiHash = process.env.TG_API_HASH;
 const botToken = process.env.TG_BOT_TOKEN;
+const sessionString = process.env.TG_STRING_SESSION;
 
-const stringSession = new StringSession(process.env.TG_STRING_SESSION);
+if (!apiId || !apiHash || !botToken || !sessionString) {
+  throw new Error("❌ Missing required environment variables. Check your .env file.");
+}
+
+const stringSession = new StringSession(sessionString);
 const client = new TelegramClient(stringSession, apiId, apiHash, {
   connectionRetries: 5,
 });
 
 const bot = new Telegraf(botToken);
-const paidUsers = {}; // in-memory DB for MVP
-const pendingRequests = {}; // to match responses
+const paidUsers = {};       // MVP only - in-memory storage
+const pendingRequests = {}; // chatId -> command mapping
 
-const pricePerSearch = 100; // $1 in cents
+const pricePerSearch = 100; // Stripe amount (100 cents = $1)
 
 async function createCheckoutSession(ctx, command, args) {
   const session = await stripe.checkout.sessions.create({
@@ -43,14 +46,17 @@ async function createCheckoutSession(ctx, command, args) {
   return session.url;
 }
 
-bot.start((ctx) => ctx.reply('Welcome to the TelegramDB Proxy Bot. Use /search, /where, /info, etc.'));
-
 const allSupportedCommands = [
-  'help', 'credits', 'where', 'near', 'network', 'info', 'search', 'title', 'group', 'channel', 'bot', 'members',
+  'help', 'credits', 'where', 'near', 'network', 'info',
+  'search', 'title', 'group', 'channel', 'bot', 'members',
   'language', 'add', 'faq', 'support', 'stats', 'terms'
 ];
 
 const paidCommands = ['where', 'near', 'network', 'info', 'members'];
+
+bot.start((ctx) =>
+  ctx.reply('Welcome to the TelegramDB Proxy Bot. Use /search, /where, /info, etc.')
+);
 
 bot.command((cmd) => true, async (ctx) => {
   const [command, ...args] = ctx.message.text.slice(1).split(' ');
@@ -60,38 +66,44 @@ bot.command((cmd) => true, async (ctx) => {
     return ctx.reply(`❌ Unknown command: /${command}`);
   }
 
-  if (paidCommands.includes(command)) {
-    if (!paidUsers[ctx.chat.id]) {
-      const url = await createCheckoutSession(ctx, command, argStr);
-      return ctx.reply(`🔒 This command requires payment. Click to proceed: ${url}`);
-    }
+  if (paidCommands.includes(command) && !paidUsers[ctx.chat.id]) {
+    const url = await createCheckoutSession(ctx, command, argStr);
+    return ctx.reply(`🔒 This command requires payment. Click to proceed:\n${url}`);
   }
 
-  // Save who made the request
   pendingRequests[ctx.chat.id] = command;
 
-  await client.sendMessage('@tgdb_bot', { message: `/${command} ${argStr}` });
-  ctx.reply(`✅ Your request (/` + command + `) was sent. Please wait for the response...`);
+  try {
+    await client.sendMessage('tgdb_bot', { message: `/${command} ${argStr}` });
+    ctx.reply(`✅ Request sent to /${command}. Please wait...`);
+  } catch (err) {
+    console.error("❌ Failed to send message:", err);
+    ctx.reply("❌ Failed to send request. Please try again later.");
+  }
 });
 
 client.addEventHandler(async (event) => {
   const message = event.message;
   const sender = await message.getSender();
-  if (sender && sender.username === 'tgdb_bot') {
-    for (const chatId in pendingRequests) {
-      bot.telegram.sendMessage(chatId, `📬 Result from /${pendingRequests[chatId]}:
 
-${message.message}`);
-      delete pendingRequests[chatId];
-      break;
-    }
+  if (!sender?.username || sender.username.toLowerCase() !== 'tgdb_bot') {
+    return; // Ignore other messages
   }
-}, new NewMessage({}));
 
-bot.launch();
+  console.log(`📨 Message received from @tgdb_bot: ${message.message}`);
+
+  for (const chatId in pendingRequests) {
+    await bot.telegram.sendMessage(chatId, `📬 Result from /${pendingRequests[chatId]}:\n\n${message.message}`);
+    delete pendingRequests[chatId];
+    break;
+  }
+}, new NewMessage({ incoming: true }));
 
 (async () => {
-  console.log('Connecting to Telegram...');
+  console.log("🚀 Connecting Telegram Client...");
   await client.connect();
-  console.log('✅ Connected as:', await client.getMe());
+  console.log("✅ Connected as:", (await client.getMe()).username || "Anonymous");
+
+  console.log("🤖 Launching Telegraf bot...");
+  await bot.launch();
 })();
