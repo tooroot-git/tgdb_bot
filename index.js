@@ -70,14 +70,14 @@ bot.command((cmd) => true, async (ctx) => {
   // Save who made the request
   pendingRequests[ctx.chat.id] = command;
 
-  await client.sendMessage('@TB_Database_Bot', { message: `/${command} ${argStr}` });
+  await client.sendMessage('@tgdb_bot', { message: `/${command} ${argStr}` });
   ctx.reply(`✅ Your request (/` + command + `) was sent. Please wait for the response...`);
 });
 
 client.addEventHandler(async (event) => {
   const message = event.message;
   const sender = await message.getSender();
-  if (sender && sender.username === 'TB_Database_Bot') {
+  if (sender && sender.username === 'tgdb_bot') {
     for (const chatId in pendingRequests) {
       bot.telegram.sendMessage(chatId, `📬 Result from /${pendingRequests[chatId]}:
 
