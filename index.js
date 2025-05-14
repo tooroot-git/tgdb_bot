@@ -7,7 +7,6 @@ const Stripe = require('stripe');
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { NewMessage } = require('telegram/events');
-const input = require('input'); // For initial login only
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -93,11 +92,6 @@ bot.launch();
 
 (async () => {
   console.log('Connecting to Telegram...');
-  await client.start({
-    phoneNumber: async () => await input.text('Enter your phone number:'),
-    password: async () => await input.text('Enter your password:'),
-    phoneCode: async () => await input.text('Enter the code you received:'),
-    onError: (err) => console.log(err),
-  });
-  console.log('You are connected as:', await client.getMe());
+  await client.connect();
+  console.log('✅ Connected as:', await client.getMe());
 })();
