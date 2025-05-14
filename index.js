@@ -6,6 +6,7 @@ const { Telegraf } = require('telegraf');
 const Stripe = require('stripe');
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
+const { NewMessage } = require('telegram/events');
 const input = require('input'); // For initial login only
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -14,14 +15,14 @@ const apiId = parseInt(process.env.TG_API_ID);
 const apiHash = process.env.TG_API_HASH;
 const botToken = process.env.TG_BOT_TOKEN;
 
-const stringSession = new StringSession(process.env.TG_STRING_SESSION); // replace once generated
+const stringSession = new StringSession(process.env.TG_STRING_SESSION);
 const client = new TelegramClient(stringSession, apiId, apiHash, {
   connectionRetries: 5,
 });
 
 const bot = new Telegraf(botToken);
-
 const paidUsers = {}; // in-memory DB for MVP
+const pendingRequests = {}; // to match responses
 
 const pricePerSearch = 100; // $1 in cents
 
@@ -43,15 +44,22 @@ async function createCheckoutSession(ctx, command, args) {
   return session.url;
 }
 
-bot.start((ctx) => ctx.reply('Welcome to the TelegramDB Proxy Bot. Use /search, /where, /info etc.'));
+bot.start((ctx) => ctx.reply('Welcome to the TelegramDB Proxy Bot. Use /search, /where, /info, etc.'));
 
-const paidCommands = [
-  'where', 'near', 'network', 'info', 'members'
+const allSupportedCommands = [
+  'help', 'credits', 'where', 'near', 'network', 'info', 'search', 'title', 'group', 'channel', 'bot', 'members',
+  'language', 'add', 'faq', 'support', 'stats', 'terms'
 ];
+
+const paidCommands = ['where', 'near', 'network', 'info', 'members'];
 
 bot.command((cmd) => true, async (ctx) => {
   const [command, ...args] = ctx.message.text.slice(1).split(' ');
   const argStr = args.join(' ');
+
+  if (!allSupportedCommands.includes(command)) {
+    return ctx.reply(`❌ Unknown command: /${command}`);
+  }
 
   if (paidCommands.includes(command)) {
     if (!paidUsers[ctx.chat.id]) {
@@ -60,9 +68,26 @@ bot.command((cmd) => true, async (ctx) => {
     }
   }
 
+  // Save who made the request
+  pendingRequests[ctx.chat.id] = command;
+
   await client.sendMessage('@tgdb_bot', { message: `/${command} ${argStr}` });
-  ctx.reply(`✅ Your request has been sent to TelegramDB. Results will follow.`);
+  ctx.reply(`✅ Your request (/` + command + `) was sent. Please wait for the response...`);
 });
+
+client.addEventHandler(async (event) => {
+  const message = event.message;
+  const sender = await message.getSender();
+  if (sender && sender.username === 'tgdb_bot') {
+    for (const chatId in pendingRequests) {
+      bot.telegram.sendMessage(chatId, `📬 Result from /${pendingRequests[chatId]}:
+
+${message.message}`);
+      delete pendingRequests[chatId];
+      break;
+    }
+  }
+}, new NewMessage({}));
 
 bot.launch();
 
